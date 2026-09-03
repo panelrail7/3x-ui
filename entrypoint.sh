@@ -2,75 +2,104 @@
 
 set -e
 
-echo
-echo "=============================================="
-echo " Railway Ubuntu Desktop + Xray"
-echo "=============================================="
-echo
+
+# =========================================================
+# Variables
+# =========================================================
 
 XRAY_BIN="/usr/local/bin/xray"
+
 XRAY_CONFIG="/etc/xray/config.json"
 
 XRAY_PORT=10000
-NGINX_PORT=8080
+
 NOVNC_PORT=6080
-XRAY_PATH="/xray"
 
-# ---------------------------------------------------------
-# UUID
-# ---------------------------------------------------------
+APP_PORT="${PORT:-8080}"
 
-if [ -z "${XRAY_UUID}" ]; then
+XRAY_PATH="${XRAY_PATH:-/xray}"
+
+VNC_GEOMETRY="${VNC_GEOMETRY:-1280x800}"
+
+RAILWAY_DOMAIN="${RAILWAY_PUBLIC_DOMAIN:-}"
+
+
+# =========================================================
+# Start message
+# =========================================================
+
+echo ""
+echo "=================================================="
+echo " Railway Ubuntu Desktop + Xray"
+echo "=================================================="
+echo ""
+
+echo "[INFO] Railway APP PORT: ${APP_PORT}"
+
+echo "[INFO] Xray internal port: ${XRAY_PORT}"
+
+echo "[INFO] noVNC internal port: ${NOVNC_PORT}"
+
+echo "[INFO] XHTTP path: ${XRAY_PATH}"
+
+echo ""
+
+
+# =========================================================
+# Generate UUID
+# =========================================================
+
+if [ -z "${XRAY_UUID:-}" ]; then
+
     XRAY_UUID=$(${XRAY_BIN} uuid)
+
 fi
 
-echo "[+] Xray UUID:"
+
+echo "[INFO] XRAY UUID:"
+
 echo "${XRAY_UUID}"
-echo
 
-# ---------------------------------------------------------
-# Railway Domain
-# ---------------------------------------------------------
+echo ""
 
-RAILWAY_DOMAIN="${RAILWAY_PUBLIC_DOMAIN}"
 
-if [ -z "${RAILWAY_DOMAIN}" ]; then
-    echo "[!] RAILWAY_PUBLIC_DOMAIN is not available yet."
-    echo "[!] Railway domain must be generated after deployment."
-else
-    echo "[+] Railway Public Domain:"
-    echo "${RAILWAY_DOMAIN}"
-fi
+# =========================================================
+# Generate Xray configuration
+# =========================================================
 
-# ---------------------------------------------------------
-# Generate Xray config
-# ---------------------------------------------------------
+mkdir -p /etc/xray
 
 cat > "${XRAY_CONFIG}" <<EOF
 {
   "log": {
-    "loglevel": "warning"
+    "loglevel": "info"
   },
 
   "inbounds": [
     {
       "tag": "vless-xhttp",
+
       "listen": "127.0.0.1",
+
       "port": ${XRAY_PORT},
+
       "protocol": "vless",
 
       "settings": {
-        "users": [
+        "clients": [
           {
             "id": "${XRAY_UUID}",
+            "email": "railway-user",
             "level": 0
           }
         ],
+
         "decryption": "none"
       },
 
       "streamSettings": {
         "network": "xhttp",
+
         "security": "none",
 
         "xhttpSettings": {
@@ -82,84 +111,133 @@ cat > "${XRAY_CONFIG}" <<EOF
 
   "outbounds": [
     {
-      "tag": "direct",
-      "protocol": "freedom"
+      "protocol": "freedom",
+      "tag": "direct"
     },
 
     {
-      "tag": "block",
-      "protocol": "blackhole"
+      "protocol": "blackhole",
+      "tag": "block"
     }
   ]
 }
 EOF
 
-# ---------------------------------------------------------
-# Validate Xray configuration
-# ---------------------------------------------------------
 
-echo "[+] Checking Xray configuration..."
+# =========================================================
+# Test Xray configuration
+# =========================================================
 
-${XRAY_BIN} run -test -config "${XRAY_CONFIG}"
+echo "[INFO] Testing Xray configuration..."
 
-echo "[+] Xray configuration OK."
-echo
+if ! ${XRAY_BIN} run -test -config "${XRAY_CONFIG}"; then
 
-# ---------------------------------------------------------
-# Stop old processes if any
-# ---------------------------------------------------------
+    echo "[ERROR] Xray configuration is invalid."
 
-pkill -f "xray run" || true
-pkill -f "websockify" || true
-pkill -f "vncserver" || true
-pkill -f "nginx" || true
+    cat "${XRAY_CONFIG}"
 
-# ---------------------------------------------------------
+    exit 1
+
+fi
+
+
+echo "[OK] Xray configuration is valid."
+
+echo ""
+
+
+# =========================================================
 # Start Xray
-# ---------------------------------------------------------
+# =========================================================
 
-echo "[+] Starting Xray..."
+echo "[INFO] Starting Xray..."
 
 ${XRAY_BIN} run -config "${XRAY_CONFIG}" \
-    > /var/log/xray.log 2>&1 &
+    > /var/log/xray/xray.log 2>&1 &
 
 XRAY_PID=$!
 
+
 sleep 2
 
+
 if ! kill -0 "${XRAY_PID}" 2>/dev/null; then
+
     echo "[ERROR] Xray failed to start."
-    cat /var/log/xray.log
+
+    cat /var/log/xray/xray.log || true
+
     exit 1
+
 fi
 
-echo "[+] Xray started."
-echo "[+] PID: ${XRAY_PID}"
-echo
 
-# ---------------------------------------------------------
-# Start VNC
-# ---------------------------------------------------------
+echo "[OK] Xray started."
 
-echo "[+] Starting VNC..."
+echo "[INFO] Xray PID: ${XRAY_PID}"
 
+echo ""
+
+
+# =========================================================
+# Prepare VNC
+# =========================================================
+
+echo "[INFO] Preparing XFCE..."
+
+mkdir -p /root/.vnc
+
+
+cat > /root/.vnc/xstartup <<'EOF'
+#!/bin/sh
+
+unset SESSION_MANAGER
+
+unset DBUS_SESSION_BUS_ADDRESS
+
+export XDG_CURRENT_DESKTOP=XFCE
+
+export XDG_SESSION_DESKTOP=xfce
+
+exec dbus-launch --exit-with-session startxfce4
+EOF
+
+
+chmod +x /root/.vnc/xstartup
+
+
+# Remove stale VNC files
 rm -f /tmp/.X1-lock
+
 rm -f /tmp/.X11-unix/X1
 
+rm -f /root/.vnc/*.pid
+
+
+# =========================================================
+# Start VNC
+# =========================================================
+
+echo "[INFO] Starting VNC..."
+
 vncserver :1 \
+    -geometry "${VNC_GEOMETRY}" \
+    -depth 24 \
     -localhost yes \
     -SecurityTypes None \
-    -geometry 1024x768 \
-    -depth 24
+    --I-KNOW-THIS-IS-INSECURE
 
-echo "[+] VNC started on localhost:5901"
-echo
 
-# ---------------------------------------------------------
+echo "[OK] VNC started on 127.0.0.1:5901"
+
+echo ""
+
+
+# =========================================================
 # Start noVNC
-# ---------------------------------------------------------
+# =========================================================
 
-echo "[+] Starting noVNC..."
+echo "[INFO] Starting noVNC..."
 
 websockify \
     --web=/usr/share/novnc/ \
@@ -167,116 +245,239 @@ websockify \
     127.0.0.1:5901 \
     > /var/log/novnc.log 2>&1 &
 
+
 NOVNC_PID=$!
+
 
 sleep 2
 
+
 if ! kill -0 "${NOVNC_PID}" 2>/dev/null; then
+
     echo "[ERROR] noVNC failed to start."
-    cat /var/log/novnc.log
+
+    cat /var/log/novnc.log || true
+
     exit 1
+
 fi
 
-echo "[+] noVNC started."
-echo "[+] Internal noVNC: ${NOVNC_PORT}"
-echo
 
-# ---------------------------------------------------------
-# Start Nginx
-# ---------------------------------------------------------
+echo "[OK] noVNC started."
 
-echo "[+] Starting Nginx..."
+echo "[INFO] noVNC address: 127.0.0.1:${NOVNC_PORT}"
+
+echo ""
+
+
+# =========================================================
+# Generate Nginx configuration using Railway PORT
+# =========================================================
+
+echo "[INFO] Configuring Nginx..."
+
+sed "s/__PORT__/${APP_PORT}/g" \
+    /etc/nginx/nginx.conf.template \
+    > /etc/nginx/nginx.conf
+
+
+echo "[INFO] Nginx will listen on: ${APP_PORT}"
+
+echo ""
+
+
+# =========================================================
+# Test Nginx
+# =========================================================
+
+echo "[INFO] Testing Nginx configuration..."
 
 nginx -t
 
+
+echo "[OK] Nginx configuration is valid."
+
+echo ""
+
+
+# =========================================================
+# Start Nginx
+# =========================================================
+
+echo "[INFO] Starting Nginx..."
+
 nginx -g "daemon off;" &
+
+
 NGINX_PID=$!
+
 
 sleep 2
 
+
 if ! kill -0 "${NGINX_PID}" 2>/dev/null; then
+
     echo "[ERROR] Nginx failed to start."
+
     exit 1
+
 fi
 
-echo "[+] Nginx started."
-echo
 
-# ---------------------------------------------------------
-# Generate VLESS URI
-# ---------------------------------------------------------
+echo "[OK] Nginx started."
+
+echo "[INFO] Public application port: ${APP_PORT}"
+
+echo ""
+
+
+# =========================================================
+# Railway Domain
+# =========================================================
+
+echo "=================================================="
+echo "             RAILWAY CONNECTION INFO"
+echo "=================================================="
+
+echo ""
 
 if [ -n "${RAILWAY_DOMAIN}" ]; then
 
-    VLESS_URI="vless://${XRAY_UUID}@${RAILWAY_DOMAIN}:443?encryption=none&security=tls&type=xhttp&path=%2Fxray&host=${RAILWAY_DOMAIN}&sni=${RAILWAY_DOMAIN}#Railway-XHTTP"
+    echo "Railway Domain:"
 
-    echo
-    echo "=============================================="
-    echo "              CONNECTION INFO"
-    echo "=============================================="
-    echo
-    echo "Domain:"
     echo "${RAILWAY_DOMAIN}"
-    echo
-    echo "Public Port:"
-    echo "443"
-    echo
-    echo "Internal Nginx Port:"
-    echo "8080"
-    echo
-    echo "Internal Xray Port:"
-    echo "10000"
-    echo
-    echo "Internal noVNC Port:"
-    echo "6080"
-    echo
-    echo "UUID:"
-    echo "${XRAY_UUID}"
-    echo
-    echo "Xray Path:"
-    echo "${XRAY_PATH}"
-    echo
-    echo "Desktop:"
+
+    echo ""
+
+    echo "Desktop URL:"
+
     echo "https://${RAILWAY_DOMAIN}/"
-    echo
-    echo "VLESS:"
-    echo "${VLESS_URI}"
-    echo
-    echo "=============================================="
-    echo
+
+    echo ""
+
+    echo "Healthcheck URL:"
+
+    echo "https://${RAILWAY_DOMAIN}/health"
+
+    echo ""
+
 else
 
-    echo
-    echo "=============================================="
-    echo "Railway domain not available yet."
-    echo "=============================================="
-    echo
-    echo "UUID:"
-    echo "${XRAY_UUID}"
-    echo
+    echo "[WARNING] RAILWAY_PUBLIC_DOMAIN is not available."
+
+    echo ""
+
 fi
 
-# ---------------------------------------------------------
-# Monitor processes
-# ---------------------------------------------------------
+
+# =========================================================
+# Generate VLESS Link
+# =========================================================
+
+if [ -n "${RAILWAY_DOMAIN}" ]; then
+
+    VLESS_LINK="vless://${XRAY_UUID}@${RAILWAY_DOMAIN}:443?encryption=none&security=tls&type=xhttp&path=%2Fxray&host=${RAILWAY_DOMAIN}&sni=${RAILWAY_DOMAIN}#Railway-XHTTP"
+
+    echo "=================================================="
+
+    echo "                 VLESS CONFIG"
+
+    echo "=================================================="
+
+    echo ""
+
+    echo "${VLESS_LINK}"
+
+    echo ""
+
+fi
+
+
+# =========================================================
+# Internal information
+# =========================================================
+
+echo "=================================================="
+
+echo "             INTERNAL SERVICES"
+
+echo "=================================================="
+
+echo ""
+
+echo "Railway application port: ${APP_PORT}"
+
+echo ""
+
+echo "Nginx:"
+
+echo "127.0.0.1:${APP_PORT}"
+
+echo ""
+
+echo "Xray:"
+
+echo "127.0.0.1:${XRAY_PORT}"
+
+echo ""
+
+echo "noVNC:"
+
+echo "127.0.0.1:${NOVNC_PORT}"
+
+echo ""
+
+echo "VNC:"
+
+echo "127.0.0.1:5901"
+
+echo ""
+
+echo "=================================================="
+
+echo ""
+
+echo "[OK] All services started."
+
+echo ""
+
+
+# =========================================================
+# Process monitoring
+# =========================================================
 
 while true; do
 
     if ! kill -0 "${XRAY_PID}" 2>/dev/null; then
-        echo "[ERROR] Xray stopped!"
-        tail -50 /var/log/xray.log
+
+        echo "[ERROR] Xray stopped."
+
+        cat /var/log/xray/xray.log || true
+
         exit 1
+
     fi
 
-    if ! kill -0 "${NGINX_PID}" 2>/dev/null; then
-        echo "[ERROR] Nginx stopped!"
-        exit 1
-    fi
 
     if ! kill -0 "${NOVNC_PID}" 2>/dev/null; then
-        echo "[ERROR] noVNC stopped!"
+
+        echo "[ERROR] noVNC stopped."
+
+        cat /var/log/novnc.log || true
+
         exit 1
+
     fi
+
+
+    if ! kill -0 "${NGINX_PID}" 2>/dev/null; then
+
+        echo "[ERROR] Nginx stopped."
+
+        exit 1
+
+    fi
+
 
     sleep 10
 
