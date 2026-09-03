@@ -3,46 +3,12 @@
     "loglevel": "warning"
   },
 
-  "inbounds": [
-    {
-      "tag": "vless-xhttp",
-
-      "listen": "127.0.0.1",
-
-      "port": 10000,
-
-      "protocol": "vless",
-
-      "settings": {
-        "users": [
-          {
-            "id": "REPLACE_UUID",
-            "level": 0
-          }
-        ],
-        "decryption": "none"
-      },
-
-      "streamSettings": {
-        "network": "xhttp",
-        "security": "none",
-
-        "xhttpSettings": {
-          "path": "/xray"
-        }
-      }
-    }
-  ],
+  "inbounds": [],
 
   "outbounds": [
     {
-      "tag": "direct",
-      "protocol": "freedom"
-    },
-
-    {
-      "tag": "block",
-      "protocol": "blackhole"
+      "protocol": "freedom",
+      "tag": "direct"
     }
   ]
 }
